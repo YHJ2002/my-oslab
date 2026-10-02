@@ -4,6 +4,7 @@ OUTPUT_ARCH(riscv)
 ENTRY(_entry)
 SECTIONS {
     . = LOAD;
+    kernel_start = .;
     .text : { KEEP(*(.text.entry)) *(.text .text.*) }
     . = ALIGN(4096); text_end = .;
     .rodata : ALIGN(4096) { *(.rodata .rodata.*) }

@@ -35,7 +35,7 @@ typedef struct {
     page_node_t list_head;  /* 常驻哨兵，不是可分配页面；next == NULL 表示空。 */
 } alloc_region_t;
 extern pgtbl_t kernel_pgtbl;
-extern char kernel_end[], text_end[], rodata_end[];
+extern char kernel_start[], kernel_end[], text_end[], rodata_end[];
 void pmem_init(void);
 void *pmem_alloc(bool kernel);
 void pmem_free(uint64 pa, bool kernel);

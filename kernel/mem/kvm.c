@@ -3,29 +3,106 @@
 #include <asm/csr.h>
 #include <platform.h>
 pgtbl_t kernel_pgtbl;
-/* TODO(lab-2): 遍历三级页表，返回叶项地址；va < VA_MAX。
- * 不创建且路径缺失时返回 NULL；alloc 为真时从内核池分配缺失中间表，耗尽 panic。
- * 本章只支持 4KiB 叶项。调用者保证页表有效、独占修改，无并发遍历。
- */
+static const uint64 pte_perm_mask = PTE_R | PTE_W | PTE_X | PTE_U |
+                                    PTE_G | PTE_A | PTE_D;
+static const uint64 physical_limit = 1UL << 56;
+
+static uint64 vm_range_end(uint64 va, uint64 len)
+{
+    if ((va & (PAGE_SIZE - 1)) || len == 0 || va >= VA_MAX ||
+        va > UINT64_MAX - len)
+        panic("invalid virtual range");
+
+    uint64 end = va + len;
+    if (end > VA_MAX || end > UINT64_MAX - (PAGE_SIZE - 1))
+        panic("virtual range overflow");
+    end = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (end > VA_MAX)
+        panic("virtual range overflow");
+    return end;
+}
+
 pte_t *vm_getpte(pgtbl_t root, uint64 va, bool alloc)
-{ (void)root; (void)va; (void)alloc; panic("TODO(lab-2): vm_getpte"); }
-/* TODO(lab-2): 映射 [va,va+len) 到 [pa,pa+len)，错误 panic。
- * va/pa 页对齐，len > 0，末页向上覆盖；加法及取整不得溢出，
- * 覆盖范围不得超过 VA_MAX 或 56 位物理地址范围。
- * perm 仅含 R/W/X/U/G/A/D，R 或 X 至少一个，W 必须同时有 R。
- * 叶项设置 V/A/D；同一 VA/PA 可更新权限，改指向另一 PA 则 panic。
- */
+{
+    if (va >= VA_MAX)
+        panic("invalid virtual address");
+
+    pgtbl_t table = root;
+    for (int level = 2; level > 0; --level) {
+        pte_t *pte = &table[VPN(va, level)];
+        if (!(*pte & PTE_V)) {
+            if (!alloc)
+                return NULL;
+            pgtbl_t next = (pgtbl_t)pmem_alloc(true);
+            *pte = PA_TO_PTE(next) | PTE_V;
+            table = next;
+            continue;
+        }
+        if (*pte & (PTE_R | PTE_W | PTE_X))
+            panic("large page in vm_getpte");
+        table = (pgtbl_t)(uintptr_t)PTE_TO_PA(*pte);
+    }
+    return &table[VPN(va, 0)];
+}
+
 void vm_mappages(pgtbl_t root, uint64 va, uint64 pa, uint64 len, uint64 perm)
-{ (void)root; (void)va; (void)pa; (void)len; (void)perm; panic("TODO(lab-2): vm_mappages"); }
-/* TODO(lab-2): va 页对齐、len > 0，末页向上覆盖，范围及溢出约束同映射。
- * 解除缺失映射则 panic；清除叶项，可选归还普通池数据页，不回收中间页表。
- * free_pages 为真时，调用者须已消除其他使用者/别名，不能用于设备或内核页。
- */
+{
+    uint64 end = vm_range_end(va, len);
+    uint64 mapped_len = end - va;
+    if ((pa & (PAGE_SIZE - 1)) || (perm & ~pte_perm_mask) ||
+        !(perm & (PTE_R | PTE_X)) || ((perm & PTE_W) && !(perm & PTE_R)) ||
+        pa >= physical_limit || mapped_len > physical_limit ||
+        pa > physical_limit - mapped_len)
+        panic("invalid page mapping");
+
+    for (uint64 current_va = va, current_pa = pa; current_va < end;
+         current_va += PAGE_SIZE, current_pa += PAGE_SIZE) {
+        pte_t *pte = vm_getpte(root, current_va, true);
+        if (*pte & PTE_V) {
+            if (!(*pte & (PTE_R | PTE_W | PTE_X)) ||
+                PTE_TO_PA(*pte) != current_pa)
+                panic("remapping page");
+        }
+        *pte = PA_TO_PTE(current_pa) | perm | PTE_V | PTE_A | PTE_D;
+    }
+}
+
 void vm_unmappages(pgtbl_t root, uint64 va, uint64 len, bool free_pages)
-{ (void)root; (void)va; (void)len; (void)free_pages; panic("TODO(lab-2): vm_unmappages"); }
-// TODO(lab-2): 映射内核代码 RX、只读区 R、数据与可分配区 RW、UART 和 PLIC RW。
-// 不设置 U，不映射固件保留区；CLINT 由固件管理，本章不实现中断驱动。
-void kvm_init(void) { panic("TODO(lab-2): kvm_init"); }
+{
+    uint64 end = vm_range_end(va, len);
+    for (uint64 current_va = va; current_va < end; current_va += PAGE_SIZE) {
+        pte_t *pte = vm_getpte(root, current_va, false);
+        if (pte == NULL || !(*pte & PTE_V) ||
+            !(*pte & (PTE_R | PTE_W | PTE_X)))
+            panic("unmapping absent page");
+        uint64 pa = PTE_TO_PA(*pte);
+        *pte = 0;
+        if (free_pages)
+            pmem_free(pa, false);
+    }
+}
+
+void kvm_init(void)
+{
+    extern char kernel_start[];
+    uint64 dram_end = DRAM_BASE + DRAM_SIZE;
+    kernel_pgtbl = (pgtbl_t)pmem_alloc(true);
+
+    vm_mappages(kernel_pgtbl, (uint64)(uintptr_t)kernel_start,
+                (uint64)(uintptr_t)kernel_start,
+                (uint64)(uintptr_t)text_end - (uint64)(uintptr_t)kernel_start,
+                PTE_R | PTE_X);
+    vm_mappages(kernel_pgtbl, (uint64)(uintptr_t)text_end,
+                (uint64)(uintptr_t)text_end,
+                (uint64)(uintptr_t)rodata_end - (uint64)(uintptr_t)text_end,
+                PTE_R);
+    vm_mappages(kernel_pgtbl, (uint64)(uintptr_t)rodata_end,
+                (uint64)(uintptr_t)rodata_end,
+                dram_end - (uint64)(uintptr_t)rodata_end,
+                PTE_R | PTE_W);
+    vm_mappages(kernel_pgtbl, UART_BASE, UART_BASE, PAGE_SIZE, PTE_R | PTE_W);
+    vm_mappages(kernel_pgtbl, PLIC_BASE, PLIC_BASE, PLIC_SIZE, PTE_R | PTE_W);
+}
 void kvm_inithart(void)
 {
     csr_write(satp, (8UL << 60) | ((uint64)kernel_pgtbl >> 12));
