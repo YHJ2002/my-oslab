@@ -2,15 +2,26 @@
 #include <kernel/arch.h>
 #include <kernel/print.h>
 
-// TODO(lab-1): 初始化未持有的锁；owner 为 -1。
 void spinlock_init(spinlock_t *lk, const char *name)
-{ (void)lk; (void)name; panic("TODO(lab-1): spinlock_init"); }
-// TODO(lab-1): 判断当前 CPU 是否持有锁。
+{
+    lk->locked = 0;
+    lk->owner = -1;
+    lk->name = name;
+}
 bool spinlock_holding(spinlock_t *lk)
-{ (void)lk; panic("TODO(lab-1): spinlock_holding"); }
-// TODO(lab-1): push_off 后原子获取锁，记录持有者。
+{ return lk->locked != 0 && lk->owner == (int)arch_cpu_id(); }
 void spinlock_acquire(spinlock_t *lk)
-{ (void)lk; panic("TODO(lab-1): spinlock_acquire"); }
-// TODO(lab-1): 检查持有者，发布受保护写入，解锁并 pop_off。
+{
+    push_off();
+    if (spinlock_holding(lk)) panic("acquire");
+    while (__atomic_exchange_n(&lk->locked, 1, __ATOMIC_ACQUIRE) != 0)
+        ;
+    lk->owner = (int)arch_cpu_id();
+}
 void spinlock_release(spinlock_t *lk)
-{ (void)lk; panic("TODO(lab-1): spinlock_release"); }
+{
+    if (!spinlock_holding(lk)) panic("release");
+    lk->owner = -1;
+    __atomic_store_n(&lk->locked, 0, __ATOMIC_RELEASE);
+    pop_off();
+}

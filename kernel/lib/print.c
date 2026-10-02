@@ -33,18 +33,62 @@ void print_pointer(const void *pointer)
     for (unsigned i = 0; i < 16; ++i, value <<= 4)
         console_putc(digits[value >> 60]);
 }
-/* TODO(lab-1): 完成格式分派，锁覆盖整次输出。
- * %d：int，32 位有符号十进制；%x：unsigned int，32 位无符号十六进制。
- * %p：void *，64 位指针，0x 加 16 位十六进制。
- * %c：默认提升为 int 的字符；%s：const char * 字符串。
- * 提示：stdarg.h 中的 va_list 用于访问可变参数。
- * NULL 字符串显示为 (null) 是选做。
- */
 void printf(const char *fmt, ...)
-{ (void)fmt; panic("TODO(lab-1): printf"); }
-// TODO(lab-1): 条件失败时报告 warning 并停止。
+{
+    va_list ap;
+
+    spinlock_acquire(&print_lock);
+    va_start(ap, fmt);
+    while (*fmt) {
+        if (*fmt != '%') {
+            console_putc(*fmt++);
+            continue;
+        }
+
+        ++fmt;
+        if (*fmt == '\0') {
+            console_putc('%');
+            break;
+        }
+
+        switch (*fmt++) {
+        case 'd':
+            print_signed(va_arg(ap, int));
+            break;
+        case 'x':
+            print_unsigned((uint32)va_arg(ap, unsigned int), 16);
+            break;
+        case 'p':
+            print_pointer(va_arg(ap, void *));
+            break;
+        case 'c':
+            console_putc((char)va_arg(ap, int));
+            break;
+        case 's': {
+            const char *s = va_arg(ap, const char *);
+            if (s == NULL)
+                s = "(null)";
+            while (*s)
+                console_putc(*s++);
+            break;
+        }
+        case '%':
+            console_putc('%');
+            break;
+        default:
+            console_putc('%');
+            console_putc(fmt[-1]);
+            break;
+        }
+    }
+    va_end(ap);
+    spinlock_release(&print_lock);
+}
 void assert(bool condition, const char *warning)
-{ (void)condition; (void)warning; panic("TODO(lab-1): assert"); }
+{
+    if (!condition)
+        panic(warning);
+}
 void panic(const char *message)
 {
     arch_irq_disable();
