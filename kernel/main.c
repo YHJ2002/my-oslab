@@ -2,8 +2,25 @@
 #include <kernel/print.h>
 #include <platform.h>
 
-// TODO(lab-1): 主核初始化并启动其他核，以原子操作同步；每核打印一次。
+static int started;
+
 void main(void)
 {
-    panic("TODO(lab-1): main");
+    int cpuid = (int)arch_cpu_id();
+
+    if (arch_is_boot_cpu()) {
+        print_init();
+        printf("cpu %d is booting!\n", cpuid);
+        for (int cpu = 0; cpu < NCPU; cpu++) {
+            if (cpu != cpuid && arch_start_cpu((uint64)cpu) != 0)
+                panic("start_cpu failed");
+        }
+        __atomic_store_n(&started, 1, __ATOMIC_RELEASE);
+    } else {
+        while (__atomic_load_n(&started, __ATOMIC_ACQUIRE) == 0)
+            ;
+        printf("cpu %d is booting!\n", cpuid);
+    }
+
+    arch_park();
 }

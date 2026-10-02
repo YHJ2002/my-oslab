@@ -3,10 +3,11 @@
 #include <kernel/print.h>
 extern void main(void);
 
-// TODO(lab-1): 整理本核初始状态，再进入 main。
 void start(uint64 hartid, uint64 opaque)
 {
     (void)hartid;
     (void)opaque;
-    panic("TODO(lab-1): start");
+    arch_early_init();
+    main();
+    panic("main returned");
 }
