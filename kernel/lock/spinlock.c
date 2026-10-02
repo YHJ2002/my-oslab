@@ -9,7 +9,10 @@ void spinlock_init(spinlock_t *lk, const char *name)
     lk->name = name;
 }
 bool spinlock_holding(spinlock_t *lk)
-{ return lk->locked != 0 && lk->owner == (int)arch_cpu_id(); }
+{
+    return __atomic_load_n(&lk->locked, __ATOMIC_ACQUIRE) != 0 &&
+           lk->owner == (int)arch_cpu_id();
+}
 void spinlock_acquire(spinlock_t *lk)
 {
     push_off();
